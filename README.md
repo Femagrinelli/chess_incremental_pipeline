@@ -242,12 +242,13 @@ Update at least these values:
 - `AWS_SECRET_ACCESS_KEY`
 - `S3_BUCKET`
 - `CHESS_API_USER_AGENT`
+- `FERNET_KEY`
+- `SECRET_KEY`
 
 Important:
 
 - `S3_BUCKET` should already exist in AWS.
-- Leave `S3_ENDPOINT_URL` blank for AWS S3.
-- Only set `S3_ENDPOINT_URL` if you later point the project to another S3-compatible object store.
+- Leave `S3_ENDPOINT_URL` blank for AWS S3. Only set this value if you later point the project to another S3-compatible object store like MinIO.
 
 ### 3. Start the stack
 
@@ -274,6 +275,7 @@ That bootstrap reads the legacy raw files already in S3 and creates the `state/`
 ### 5. Open the services
 
 - Airflow UI: `http://<your-vps-ip>:8080`
+- If running on your machine: 'localhost:8080'
 
 ### 6. Run the new daily flow
 
@@ -291,41 +293,13 @@ make trigger-backfill
 
 ## First Bootstrap Strategy
 
-The best first-load strategy on a VPS is:
+The best first-load strategy is:
 
 1. Run `bootstrap_legacy_raw_state` once
 2. Run `titled_players_daily`
 3. Run `player_archives_incremental_daily`
 4. Let `player_games_backfill` drain any missing history gradually
 5. Run `player_games_current_month_daily` every day
-
-This avoids a giant first-day spike against both Chess.com and S3 because the state is built from the raw data you already have.
-
-If you want faster bootstrap later, increase:
-
-- `BACKFILL_PLAYERS_PER_RUN`
-- `BACKFILL_MONTHS_PER_PLAYER`
-- `TITLE_TASK_MAX_WORKERS`
-
-Do that slowly to avoid `429 Too Many Requests`.
-
-## Why This Minimizes S3 Cost
-
-- No prefix scan is required in the hot daily path.
-- The title manifest is read once and written once per title task.
-- Archive snapshots are written only when the archive list changes.
-- Current-month game objects are overwritten only when the payload changes.
-- Per-player index files are touched only for players with changed archives or active backfill.
-- The expensive reuse of old history happens once during bootstrap, not every day.
-
-## Future Silver Layer
-
-This raw/state design is ready for a silver layer later. The next step can be:
-
-- parse PGN into structured move data
-- create player-month aggregates
-- create title-level aggregates
-- expose serving-friendly datasets for analytics and APIs
 
 ## Notes
 

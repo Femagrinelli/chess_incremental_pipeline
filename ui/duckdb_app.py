@@ -47,6 +47,31 @@ def _sql_list(values: list[str]) -> str:
     return ", ".join(f"'{escape_sql(value)}'" for value in values)
 
 
+def _ensure_session_caches() -> None:
+    st.session_state.setdefault("dashboard_query_cache", {})
+    st.session_state.setdefault("adhoc_query_cache", {})
+    st.session_state.setdefault("last_adhoc_result", None)
+    st.session_state.setdefault("last_adhoc_cache_hit", False)
+
+
+def _store_cache_entry(cache_name: str, cache_key: str, value, max_items: int = 24) -> None:
+    cache = st.session_state[cache_name]
+    cache[cache_key] = value
+    while len(cache) > max_items:
+        oldest_key = next(iter(cache))
+        del cache[oldest_key]
+
+
+def _clear_query_caches() -> None:
+    st.session_state["dashboard_query_cache"] = {}
+    st.session_state["adhoc_query_cache"] = {}
+    st.session_state["last_adhoc_result"] = None
+    st.session_state["last_adhoc_cache_hit"] = False
+    execute_query.clear()
+    load_available_months.clear()
+    load_available_titles.clear()
+
+
 @st.cache_data(show_spinner=False, ttl=300)
 def execute_query(sql: str) -> dict:
     conn, rendered_sql = run_sql(sql)
@@ -200,6 +225,33 @@ def build_white_black_trend_sql(start_month: str, end_month: str, titles: list[s
     """
 
 
+def get_dashboard_results(start_month: str, end_month: str, titles: list[str]) -> tuple[dict, bool]:
+    cache_key = f"{start_month}|{end_month}|{'|'.join(sorted(titles))}"
+    cache = st.session_state["dashboard_query_cache"]
+    if cache_key in cache:
+        return cache[cache_key], True
+
+    result = {
+        "activity": execute_query(build_activity_sql(start_month, end_month, titles))["dataframe"],
+        "volatility": execute_query(build_rating_volatility_sql(start_month, end_month, titles))["dataframe"],
+        "white_black": execute_query(build_white_black_sql(start_month, end_month, titles))["dataframe"],
+        "white_black_trend": execute_query(build_white_black_trend_sql(start_month, end_month, titles))["dataframe"],
+    }
+    _store_cache_entry("dashboard_query_cache", cache_key, result)
+    return result, False
+
+
+def get_adhoc_result(sql: str) -> tuple[dict, bool]:
+    cache_key = sql.strip()
+    cache = st.session_state["adhoc_query_cache"]
+    if cache_key in cache:
+        return cache[cache_key], True
+
+    result = execute_query(sql)
+    _store_cache_entry("adhoc_query_cache", cache_key, result)
+    return result, False
+
+
 def download_csv_button(label: str, dataframe: pd.DataFrame, file_name: str) -> None:
     st.download_button(
         label,
@@ -210,6 +262,7 @@ def download_csv_button(label: str, dataframe: pd.DataFrame, file_name: str) -> 
 
 
 st.set_page_config(page_title="Chess Gold Query UI", layout="wide")
+_ensure_session_caches()
 
 st.title("Chess Gold Query UI")
 st.caption("Pre-aggregated title-month marts in DuckDB over S3 parquet")
@@ -247,6 +300,10 @@ with st.sidebar:
         "- If a dashboard is empty, run the gold DAGs first."
     )
 
+    if st.button("Clear query caches"):
+        _clear_query_caches()
+        st.success("Dashboard and ad hoc caches cleared.")
+
 if "sql_text" not in st.session_state:
     st.session_state.sql_text = DEFAULT_SQL
 
@@ -257,14 +314,27 @@ dashboard_tab, volatility_tab, performance_tab, sql_tab = st.tabs(
     ["Activity Trends", "Rating Volatility", "White vs Black", "SQL Runner"]
 )
 
+dashboard_results = None
+dashboard_cache_hit = False
+dashboard_error = None
+
 if not selected_titles:
     st.warning("Select at least one title in the sidebar to render the dashboard.")
 else:
+    try:
+        dashboard_results, dashboard_cache_hit = get_dashboard_results(start_month, end_month, selected_titles)
+        if dashboard_cache_hit:
+            st.caption("Dashboard results served from the in-memory cache for the current filters.")
+    except Exception:
+        dashboard_error = traceback.format_exc()
+
     with dashboard_tab:
         st.subheader("Activity Trends")
         st.caption("Gold mart: monthly game volume, active players, and average games per active player.")
         try:
-            activity_df = execute_query(build_activity_sql(start_month, end_month, selected_titles))["dataframe"]
+            if dashboard_error:
+                raise RuntimeError(dashboard_error)
+            activity_df = dashboard_results["activity"] if dashboard_results else pd.DataFrame()
             if activity_df.empty:
                 st.info("No gold activity rows found. Run the gold backfill or current-month DAG first.")
             else:
@@ -306,13 +376,15 @@ else:
                 download_csv_button("Download activity CSV", activity_df, "gold_activity_trends.csv")
         except Exception:
             st.error("Activity query failed.")
-            st.code(traceback.format_exc())
+            st.code(dashboard_error or traceback.format_exc())
 
     with volatility_tab:
         st.subheader("Rating Volatility By Title")
         st.caption("Gold mart: monthly volatility based on player-month rating range and standard deviation.")
         try:
-            volatility_df = execute_query(build_rating_volatility_sql(start_month, end_month, selected_titles))["dataframe"]
+            if dashboard_error:
+                raise RuntimeError(dashboard_error)
+            volatility_df = dashboard_results["volatility"] if dashboard_results else pd.DataFrame()
             if volatility_df.empty:
                 st.info("No gold volatility rows found. Run the gold backfill or current-month DAG first.")
             else:
@@ -346,14 +418,16 @@ else:
                 download_csv_button("Download volatility CSV", volatility_df, "gold_rating_volatility.csv")
         except Exception:
             st.error("Volatility query failed.")
-            st.code(traceback.format_exc())
+            st.code(dashboard_error or traceback.format_exc())
 
     with performance_tab:
         st.subheader("White Vs Black Performance By Title")
         st.caption("Gold mart: weighted score rate with white and black across the selected date range.")
         try:
-            white_black_df = execute_query(build_white_black_sql(start_month, end_month, selected_titles))["dataframe"]
-            white_black_trend_df = execute_query(build_white_black_trend_sql(start_month, end_month, selected_titles))["dataframe"]
+            if dashboard_error:
+                raise RuntimeError(dashboard_error)
+            white_black_df = dashboard_results["white_black"] if dashboard_results else pd.DataFrame()
+            white_black_trend_df = dashboard_results["white_black_trend"] if dashboard_results else pd.DataFrame()
 
             if white_black_df.empty:
                 st.info("No gold white-vs-black rows found. Run the gold backfill or current-month DAG first.")
@@ -403,7 +477,7 @@ else:
                 download_csv_button("Download white-vs-black CSV", white_black_df, "gold_white_vs_black.csv")
         except Exception:
             st.error("White-vs-black query failed.")
-            st.code(traceback.format_exc())
+            st.code(dashboard_error or traceback.format_exc())
 
 with sql_tab:
     st.subheader("SQL Runner")
@@ -417,18 +491,28 @@ with sql_tab:
     if run_clicked:
         try:
             with st.spinner("Running query..."):
-                result = execute_query(sql_text)
+                result, adhoc_cache_hit = get_adhoc_result(sql_text)
 
-            st.success(f"Query finished. Rows returned: {result['row_count']}")
-            if show_sql:
-                st.code(result["rendered_sql"], language="sql")
-
-            dataframe = result["dataframe"]
-            if not dataframe.empty:
-                st.dataframe(dataframe, use_container_width=True)
-                download_csv_button("Download query CSV", dataframe, "duckdb_query_result.csv")
-            else:
-                st.info("Query executed successfully and did not return rows.")
+            st.session_state["last_adhoc_result"] = result
+            st.session_state["last_adhoc_cache_hit"] = adhoc_cache_hit
         except Exception:
             st.error("Query failed.")
             st.code(traceback.format_exc())
+
+    adhoc_result = st.session_state.get("last_adhoc_result")
+    if adhoc_result:
+        if st.session_state.get("last_adhoc_cache_hit"):
+            st.caption("Ad hoc result served from the in-memory SQL cache.")
+        else:
+            st.caption("Latest ad hoc result cached for this session.")
+
+        st.success(f"Query finished. Rows returned: {adhoc_result['row_count']}")
+        if show_sql:
+            st.code(adhoc_result["rendered_sql"], language="sql")
+
+        dataframe = adhoc_result["dataframe"]
+        if not dataframe.empty:
+            st.dataframe(dataframe, use_container_width=True)
+            download_csv_button("Download query CSV", dataframe, "duckdb_query_result.csv")
+        else:
+            st.info("Query executed successfully and did not return rows.")

@@ -1,10 +1,10 @@
 SELECT
     title,
-    color,
-    COUNT(*) AS games,
-    ROUND(AVG(score), 4) AS avg_score
+    white_score_rate,
+    black_score_rate,
+    white_minus_black,
+    total_games
 FROM read_parquet(
-    's3://{{S3_BUCKET}}/{{SILVER_PREFIX}}/player_games/year=2026/month=03/title=*/bucket=*/part-000.parquet'
+    's3://{{S3_BUCKET}}/{{GOLD_PREFIX}}/title_month_color_performance/year=2026/month=03/part-000.parquet'
 )
-GROUP BY 1, 2
-ORDER BY 1, 2;
+ORDER BY white_minus_black DESC, title;

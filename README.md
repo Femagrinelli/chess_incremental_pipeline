@@ -180,6 +180,32 @@ The silver datasets are organized as follows:
 
 The `player_games` and `player_month` datasets are partitioned by month and title so the daily materialization can run in smaller chunks on a modest VPS.
 
+## Gold Layout Produced By This Project
+
+```text
+chess-lake/
+└── gold/
+    └── chess_com/
+        ├── title_month_activity/
+        │   └── year=2026/
+        │       └── month=03/
+        │           └── part-000.parquet
+        ├── title_month_rating_volatility/
+        │   └── year=2026/
+        │       └── month=03/
+        │           └── part-000.parquet
+        └── title_month_color_performance/
+            └── year=2026/
+                └── month=03/
+                    └── part-000.parquet
+```
+
+The gold marts are organized at title-month grain:
+
+- `title_month_activity`: activity and population metrics ready for trend charts.
+- `title_month_rating_volatility`: intramonth rating movement metrics by title.
+- `title_month_color_performance`: white-vs-black score metrics by title and month.
+
 ## Project Structure
 
 ```text
@@ -200,14 +226,17 @@ chess_incremental_pipeline/
 │       ├── player_games_backfill.py
 │       ├── silver_title_roster_daily.py
 │       ├── silver_games_current_month_daily.py
-│       └── silver_games_month_backfill.py
+│       ├── silver_games_month_backfill.py
+│       ├── gold_title_month_current_daily.py
+│       └── gold_title_month_backfill.py
 └── scripts/
     ├── config.py
     ├── chess_client.py
     ├── storage_client.py
     ├── state_store.py
     ├── ingestion_service.py
-    └── silver_service.py
+    ├── silver_service.py
+    └── gold_service.py
 ```
 
 ## DAG Design
@@ -294,6 +323,26 @@ chess_incremental_pipeline/
 ```json
 {"start_month": "2025-01", "end_month": "2025-12"}
 ```
+
+### `gold_title_month_current_daily`
+
+- Schedule: `05:30 UTC`
+- Single task.
+- Reads current-month `silver/player_month/...` partitions.
+- Writes the current-month gold marts for dashboards and recurring analysis.
+
+### `gold_title_month_backfill`
+
+- Schedule: manual only
+- Single task.
+- Rebuilds selected historical gold marts from silver parquet already stored in S3.
+- Exposes the same Airflow UI params as the silver backfill DAG:
+  - `month_key`
+  - `month_keys`
+  - `year`
+  - `years`
+  - `start_month`
+  - `end_month`
 
 ## Step-by-Step VPS Setup
 
@@ -401,6 +450,24 @@ For a range:
 make trigger-silver-backfill SILVER_CONF='{"start_month":"2025-01","end_month":"2025-12"}'
 ```
 
+For the gold daily marts:
+
+```bash
+make trigger-gold
+```
+
+For a manual gold month rebuild:
+
+```bash
+make trigger-gold-backfill
+```
+
+For a gold year rebuild:
+
+```bash
+make trigger-gold-backfill GOLD_CONF='{"year":"2026"}'
+```
+
 When triggering from the Airflow UI, these same fields can be filled directly in the DAG params form, or pasted as JSON in the trigger config dialog.
 
 ## First Bootstrap Strategy
@@ -426,7 +493,7 @@ The silver layer is stored as parquet so it can be queried by several tools late
 
 ## DuckDB Queries
 
-DuckDB is wired into the Airflow image so the VPS can query silver parquet directly in S3.
+DuckDB is wired into the Airflow image so the VPS can query silver and gold parquet directly in S3.
 
 After pulling changes, rebuild the image:
 
@@ -456,16 +523,16 @@ http://<your-vps-ip>:8501
 Run a sample query file:
 
 ```bash
-make duckdb-file SQL_FILE=player_month_sample.sql
+make duckdb-file SQL_FILE=activity_trends_dashboard.sql
 ```
 
 Run an inline query:
 
 ```bash
-make duckdb-query SQL="SELECT COUNT(*) FROM read_parquet('s3://your-bucket/silver/chess_com/player_month/year=2026/month=03/title=GM/bucket=*/part-000.parquet')"
+make duckdb-query SQL="SELECT * FROM read_parquet('s3://your-bucket/gold/chess_com/title_month_activity/year=2026/month=03/part-000.parquet')"
 ```
 
-The helper script automatically reads `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `S3_BUCKET`, and `SILVER_PREFIX` from the container environment.
+The helper script automatically reads `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `S3_BUCKET`, `SILVER_PREFIX`, and `GOLD_PREFIX` from the container environment.
 
 The optional Streamlit UI uses the same DuckDB + S3 configuration and lets you:
 
@@ -475,7 +542,7 @@ The optional Streamlit UI uses the same DuckDB + S3 configuration and lets you:
   - white-vs-black performance by title
 - load saved SQL templates from `sql/`
 - edit SQL in a browser
-- run queries against silver parquet in S3
+- run queries against gold or silver parquet in S3
 - download the result as CSV
 
 Useful starter SQL files:

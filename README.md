@@ -441,6 +441,18 @@ List the bundled sample SQL files:
 make duckdb-list
 ```
 
+Start the query UI:
+
+```bash
+make duckdb-ui-up
+```
+
+Then open:
+
+```text
+http://<your-vps-ip>:8501
+```
+
 Run a sample query file:
 
 ```bash
@@ -454,6 +466,24 @@ make duckdb-query SQL="SELECT COUNT(*) FROM read_parquet('s3://your-bucket/silve
 ```
 
 The helper script automatically reads `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `S3_BUCKET`, and `SILVER_PREFIX` from the container environment.
+
+The optional Streamlit UI uses the same DuckDB + S3 configuration and lets you:
+
+- explore dashboard tabs for:
+  - activity trends
+  - rating volatility by title
+  - white-vs-black performance by title
+- load saved SQL templates from `sql/`
+- edit SQL in a browser
+- run queries against silver parquet in S3
+- download the result as CSV
+
+Useful starter SQL files:
+
+- `player_month_sample.sql`
+- `activity_trends_dashboard.sql`
+- `rating_volatility_by_title.sql`
+- `white_black_performance_by_title.sql`
 
 ## Notes
 

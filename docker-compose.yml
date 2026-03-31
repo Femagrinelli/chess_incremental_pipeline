@@ -36,6 +36,7 @@ x-airflow-common: &airflow-common
     STATE_PREFIX: ${STATE_PREFIX}
     CHESS_API_USER_AGENT: ${CHESS_API_USER_AGENT}
     CHESS_API_DELAY: ${CHESS_API_DELAY}
+    GOLD_PREFIX: ${GOLD_PREFIX:-gold/chess_com}
     ARCHIVE_REFRESH_DAYS: ${ARCHIVE_REFRESH_DAYS}
     ACTIVE_ARCHIVE_REFRESH_HOURS: ${ACTIVE_ARCHIVE_REFRESH_HOURS}
     TITLE_TASK_MAX_WORKERS: ${TITLE_TASK_MAX_WORKERS}
@@ -102,6 +103,38 @@ services:
       - |
         airflow db migrate &&
         exec airflow scheduler
+
+  duckdb-ui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: chess_duckdb_ui
+    entrypoint: []
+    env_file: .env
+    environment:
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_REGION: ${AWS_REGION}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      S3_BUCKET: ${S3_BUCKET}
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
+      SILVER_PREFIX: ${SILVER_PREFIX:-silver/chess_com}
+      GOLD_PREFIX: ${GOLD_PREFIX:-gold/chess_com}
+      PYTHONPATH: /opt/airflow/scripts
+    command:
+      - streamlit
+      - run
+      - /opt/airflow/ui/duckdb_app.py
+      - --server.address=0.0.0.0
+      - --server.port=8501
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./scripts:/opt/airflow/scripts
+      - ./sql:/opt/airflow/sql
+      - ./ui:/opt/airflow/ui
+    restart: unless-stopped
+    profiles: ["tools"]
 
 volumes:
   postgres_data:

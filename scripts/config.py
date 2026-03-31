@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 RAW_PREFIX = os.environ.get("RAW_PREFIX", "raw")
 STATE_PREFIX = os.environ.get("STATE_PREFIX", "state/chess_com")
 SILVER_PREFIX = os.environ.get("SILVER_PREFIX", "silver/chess_com")
+GOLD_PREFIX = os.environ.get("GOLD_PREFIX", "gold/chess_com")
 
 ARCHIVE_REFRESH_DAYS = int(os.environ.get("ARCHIVE_REFRESH_DAYS", "30"))
 ACTIVE_ARCHIVE_REFRESH_HOURS = int(os.environ.get("ACTIVE_ARCHIVE_REFRESH_HOURS", "24"))
@@ -112,3 +113,30 @@ def silver_player_month_prefix(month_key: str, title: str | None = None) -> str:
 
 def silver_player_month_key(month_key: str, bucket: str, title: str | None = None) -> str:
     return f"{silver_player_month_prefix(month_key, title)}bucket={bucket}/part-000.parquet"
+
+
+def gold_title_month_activity_prefix(month_key: str) -> str:
+    year, month = split_month_key(month_key)
+    return f"{GOLD_PREFIX}/title_month_activity/year={year}/month={month}/"
+
+
+def gold_title_month_activity_key(month_key: str) -> str:
+    return f"{gold_title_month_activity_prefix(month_key)}part-000.parquet"
+
+
+def gold_title_month_rating_volatility_prefix(month_key: str) -> str:
+    year, month = split_month_key(month_key)
+    return f"{GOLD_PREFIX}/title_month_rating_volatility/year={year}/month={month}/"
+
+
+def gold_title_month_rating_volatility_key(month_key: str) -> str:
+    return f"{gold_title_month_rating_volatility_prefix(month_key)}part-000.parquet"
+
+
+def gold_title_month_color_performance_prefix(month_key: str) -> str:
+    year, month = split_month_key(month_key)
+    return f"{GOLD_PREFIX}/title_month_color_performance/year={year}/month={month}/"
+
+
+def gold_title_month_color_performance_key(month_key: str) -> str:
+    return f"{gold_title_month_color_performance_prefix(month_key)}part-000.parquet"

@@ -61,6 +61,7 @@ mkdir -p airflow/dags
 mkdir -p airflow/logs
 mkdir -p airflow/plugins
 mkdir -p scripts
+mkdir -p sql
 chmod -R 777 airflow/logs
 success "Directories are ready."
 
@@ -107,4 +108,10 @@ echo -e "    make ps"
 echo -e "    make trigger-bootstrap"
 echo -e "    make trigger-core"
 echo -e "    make trigger-backfill"
+echo -e "    make trigger-silver"
+echo -e "    make trigger-silver-backfill MONTH_KEY=2026-02"
+echo -e "    make trigger-silver-backfill SILVER_CONF='{\"year\":\"2026\"}'"
+echo -e "    make duckdb-list"
+echo -e "    make duckdb-file SQL_FILE=player_month_sample.sql"
+echo -e "    make duckdb-query SQL='SELECT 1'"
 echo -e "    make down"

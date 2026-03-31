@@ -6,8 +6,13 @@ from airflow.operators.python import PythonOperator
 import sys
 sys.path.insert(0, "/opt/airflow/scripts")
 
-import chess_client
-import ingestion_service
+TITLES = ("GM", "WGM", "IM", "WIM", "FM", "WFM", "NM", "WNM", "CM", "WCM")
+
+
+def _bootstrap_title_state_from_legacy_raw(title: str, ds: str) -> None:
+    import ingestion_service
+
+    ingestion_service.bootstrap_title_state_from_legacy_raw(title=title, ds=ds)
 
 
 DEFAULT_ARGS = {
@@ -27,10 +32,10 @@ with DAG(
     max_active_runs=1,
     max_active_tasks=2,
 ) as dag:
-    for title in chess_client.VALID_TITLES:
+    for title in TITLES:
         PythonOperator(
             task_id=f"bootstrap_{title}",
-            python_callable=ingestion_service.bootstrap_title_state_from_legacy_raw,
+            python_callable=_bootstrap_title_state_from_legacy_raw,
             op_kwargs={
                 "title": title,
                 "ds": "{{ ds }}",

@@ -1,4 +1,4 @@
-.PHONY: setup build up down restart logs logs-scheduler logs-webserver ps shell trigger-bootstrap trigger-core trigger-backfill clean
+.PHONY: setup build up down restart logs logs-scheduler logs-webserver ps shell trigger-bootstrap trigger-core trigger-backfill trigger-silver trigger-silver-backfill duckdb-list duckdb-query duckdb-file clean
 
 setup:
 	bash setup.sh
@@ -40,6 +40,34 @@ trigger-core:
 
 trigger-backfill:
 	docker exec chess_airflow_scheduler airflow dags trigger player_games_backfill
+
+trigger-silver:
+	docker exec chess_airflow_scheduler airflow dags trigger silver_title_roster_daily
+	docker exec chess_airflow_scheduler airflow dags trigger silver_games_current_month_daily
+
+trigger-silver-backfill:
+ifdef SILVER_CONF
+	docker exec chess_airflow_scheduler airflow dags trigger silver_games_month_backfill --conf '$(SILVER_CONF)'
+else ifeq ($(MONTH_KEY),)
+	docker exec chess_airflow_scheduler airflow dags trigger silver_games_month_backfill
+else
+	docker exec chess_airflow_scheduler airflow dags trigger silver_games_month_backfill --conf '{"month_key":"$(MONTH_KEY)"}'
+endif
+
+duckdb-list:
+	ls -1 sql
+
+duckdb-query:
+ifndef SQL
+	$(error Use: make duckdb-query SQL="SELECT ...")
+endif
+	docker exec -i chess_airflow_scheduler python /opt/airflow/scripts/duckdb_query.py --sql "$(SQL)"
+
+duckdb-file:
+ifndef SQL_FILE
+	$(error Use: make duckdb-file SQL_FILE=player_month_sample.sql)
+endif
+	docker exec -i chess_airflow_scheduler python /opt/airflow/scripts/duckdb_query.py --file /opt/airflow/sql/$(SQL_FILE)
 
 clean:
 	docker compose down -v

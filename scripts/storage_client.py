@@ -6,6 +6,7 @@ The daily design avoids list calls in the hot path and relies on deterministic k
 import json
 import logging
 import os
+from io import BytesIO
 from functools import lru_cache
 from typing import Optional
 
@@ -49,6 +50,35 @@ def upload_json(object_path: str, data: dict, metadata: Optional[dict] = None) -
     logger.info("Uploaded s3://%s/%s", bucket, object_path)
 
 
+def upload_bytes(
+    object_path: str,
+    payload: bytes,
+    content_type: str = "application/octet-stream",
+    metadata: Optional[dict] = None,
+) -> None:
+    client = _get_client()
+    bucket = _get_bucket()
+    cleaned_metadata = {str(k): str(v) for k, v in (metadata or {}).items() if v is not None}
+
+    client.put_object(
+        Bucket=bucket,
+        Key=object_path,
+        Body=payload,
+        ContentType=content_type,
+        Metadata=cleaned_metadata,
+    )
+    logger.info("Uploaded s3://%s/%s", bucket, object_path)
+
+
+def upload_parquet_bytes(object_path: str, payload: BytesIO, metadata: Optional[dict] = None) -> None:
+    upload_bytes(
+        object_path=object_path,
+        payload=payload.getvalue(),
+        content_type="application/octet-stream",
+        metadata=metadata,
+    )
+
+
 def download_json(object_path: str) -> Optional[dict]:
     client = _get_client()
     bucket = _get_bucket()
@@ -86,3 +116,24 @@ def list_objects(prefix: str) -> list[str]:
     for page in pages:
         keys.extend(obj["Key"] for obj in page.get("Contents", []))
     return keys
+
+
+def delete_prefix(prefix: str) -> int:
+    keys = list_objects(prefix)
+    if not keys:
+        return 0
+
+    client = _get_client()
+    bucket = _get_bucket()
+    deleted = 0
+
+    for start in range(0, len(keys), 1000):
+        batch = keys[start : start + 1000]
+        client.delete_objects(
+            Bucket=bucket,
+            Delete={"Objects": [{"Key": key} for key in batch], "Quiet": True},
+        )
+        deleted += len(batch)
+
+    logger.info("Deleted %d objects under s3://%s/%s", deleted, bucket, prefix)
+    return deleted

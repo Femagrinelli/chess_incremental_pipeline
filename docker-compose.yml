@@ -87,7 +87,8 @@ services:
           --email "$$AIRFLOW_ADMIN_EMAIL" 2>/dev/null || true &&
         exec airflow webserver
     ports:
-      - "8080:8080"
+      # Expose only on the VPS loopback interface; access via SSH port forwarding.
+      - "127.0.0.1:8080:8080"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
@@ -128,7 +129,8 @@ services:
       - --server.address=0.0.0.0
       - --server.port=8501
     ports:
-      - "8501:8501"
+      # Expose only on the VPS loopback interface; access via SSH port forwarding.
+      - "127.0.0.1:8501:8501"
     volumes:
       - ./scripts:/opt/airflow/scripts
       - ./sql:/opt/airflow/sql

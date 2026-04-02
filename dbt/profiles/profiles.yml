@@ -1,0 +1,12 @@
+chess_medallion:
+  target: dev
+  outputs:
+    dev:
+      type: athena
+      database: "{{ env_var('DBT_ATHENA_CATALOG', 'awsdatacatalog') }}"
+      schema: "{{ env_var('DBT_ATHENA_SILVER_SCHEMA', 'chess_silver') }}"
+      s3_staging_dir: "{{ env_var('DBT_ATHENA_S3_STAGING_DIR') }}"
+      region_name: "{{ env_var('AWS_REGION', 'us-east-1') }}"
+      work_group: "{{ env_var('DBT_ATHENA_WORKGROUP', 'primary') }}"
+      threads: "{{ env_var('DBT_ATHENA_THREADS', '4') | int }}"
+      num_retries: 3

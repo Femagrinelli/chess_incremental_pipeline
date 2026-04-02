@@ -1,4 +1,4 @@
-.PHONY: setup build up down restart logs logs-scheduler logs-webserver ps shell trigger-bootstrap trigger-core trigger-backfill trigger-silver trigger-silver-backfill trigger-gold trigger-gold-backfill duckdb-list duckdb-query duckdb-file duckdb-ui-up duckdb-ui-logs duckdb-ui-down clean
+.PHONY: setup build up down restart logs logs-scheduler logs-webserver ps shell trigger-bootstrap trigger-core trigger-backfill trigger-bronze trigger-bronze-backfill trigger-dbt-silver trigger-dbt-silver-backfill trigger-dbt-gold trigger-dbt-gold-backfill dbt-debug dbt-ls clean
 
 setup:
 	bash setup.sh
@@ -41,54 +41,48 @@ trigger-core:
 trigger-backfill:
 	docker exec chess_airflow_scheduler airflow dags trigger player_games_backfill
 
-trigger-silver:
-	docker exec chess_airflow_scheduler airflow dags trigger silver_title_roster_daily
-	docker exec chess_airflow_scheduler airflow dags trigger silver_games_current_month_daily
+trigger-bronze:
+	docker exec chess_airflow_scheduler airflow dags trigger bronze_roster_daily
+	docker exec chess_airflow_scheduler airflow dags trigger bronze_games_current_month_daily
 
-trigger-gold:
-	docker exec chess_airflow_scheduler airflow dags trigger gold_title_month_current_daily
+trigger-dbt-silver:
+	docker exec chess_airflow_scheduler airflow dags trigger dbt_silver_current_daily
 
-trigger-silver-backfill:
-ifdef SILVER_CONF
-	docker exec chess_airflow_scheduler airflow dags trigger silver_games_month_backfill --conf '$(SILVER_CONF)'
+trigger-dbt-gold:
+	docker exec chess_airflow_scheduler airflow dags trigger dbt_gold_current_daily
+
+trigger-bronze-backfill:
+ifdef BRONZE_CONF
+	docker exec chess_airflow_scheduler airflow dags trigger bronze_games_month_backfill --conf '$(BRONZE_CONF)'
 else ifeq ($(MONTH_KEY),)
-	docker exec chess_airflow_scheduler airflow dags trigger silver_games_month_backfill
+	docker exec chess_airflow_scheduler airflow dags trigger bronze_games_month_backfill
 else
-	docker exec chess_airflow_scheduler airflow dags trigger silver_games_month_backfill --conf '{"month_key":"$(MONTH_KEY)"}'
+	docker exec chess_airflow_scheduler airflow dags trigger bronze_games_month_backfill --conf '{"month_key":"$(MONTH_KEY)"}'
 endif
 
-trigger-gold-backfill:
-ifdef GOLD_CONF
-	docker exec chess_airflow_scheduler airflow dags trigger gold_title_month_backfill --conf '$(GOLD_CONF)'
+trigger-dbt-silver-backfill:
+ifdef DBT_SILVER_CONF
+	docker exec chess_airflow_scheduler airflow dags trigger dbt_silver_backfill --conf '$(DBT_SILVER_CONF)'
 else ifeq ($(MONTH_KEY),)
-	docker exec chess_airflow_scheduler airflow dags trigger gold_title_month_backfill
+	docker exec chess_airflow_scheduler airflow dags trigger dbt_silver_backfill
 else
-	docker exec chess_airflow_scheduler airflow dags trigger gold_title_month_backfill --conf '{"month_key":"$(MONTH_KEY)"}'
+	docker exec chess_airflow_scheduler airflow dags trigger dbt_silver_backfill --conf '{"month_key":"$(MONTH_KEY)"}'
 endif
 
-duckdb-list:
-	ls -1 sql
-
-duckdb-query:
-ifndef SQL
-	$(error Use: make duckdb-query SQL="SELECT ...")
+trigger-dbt-gold-backfill:
+ifdef DBT_GOLD_CONF
+	docker exec chess_airflow_scheduler airflow dags trigger dbt_gold_backfill --conf '$(DBT_GOLD_CONF)'
+else ifeq ($(MONTH_KEY),)
+	docker exec chess_airflow_scheduler airflow dags trigger dbt_gold_backfill
+else
+	docker exec chess_airflow_scheduler airflow dags trigger dbt_gold_backfill --conf '{"month_key":"$(MONTH_KEY)"}'
 endif
-	docker exec -i chess_airflow_scheduler python /opt/airflow/scripts/duckdb_query.py --sql "$(SQL)"
 
-duckdb-file:
-ifndef SQL_FILE
-	$(error Use: make duckdb-file SQL_FILE=player_month_sample.sql)
-endif
-	docker exec -i chess_airflow_scheduler python /opt/airflow/scripts/duckdb_query.py --file /opt/airflow/sql/$(SQL_FILE)
+dbt-debug:
+	docker exec chess_airflow_scheduler dbt debug --project-dir /opt/airflow/dbt/chess_medallion --profiles-dir /opt/airflow/dbt/profiles
 
-duckdb-ui-up:
-	docker compose --profile tools up -d --build duckdb-ui
-
-duckdb-ui-logs:
-	docker compose --profile tools logs -f --tail=100 duckdb-ui
-
-duckdb-ui-down:
-	docker compose --profile tools stop duckdb-ui
+dbt-ls:
+	docker exec chess_airflow_scheduler dbt ls --project-dir /opt/airflow/dbt/chess_medallion --profiles-dir /opt/airflow/dbt/profiles
 
 clean:
 	docker compose down -v

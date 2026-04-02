@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 
 RAW_PREFIX = os.environ.get("RAW_PREFIX", "raw")
+BRONZE_PREFIX = os.environ.get("BRONZE_PREFIX", "bronze/chess_com")
 STATE_PREFIX = os.environ.get("STATE_PREFIX", "state/chess_com")
 SILVER_PREFIX = os.environ.get("SILVER_PREFIX", "silver/chess_com")
 GOLD_PREFIX = os.environ.get("GOLD_PREFIX", "gold/chess_com")
@@ -12,7 +13,7 @@ ACTIVE_ARCHIVE_REFRESH_HOURS = int(os.environ.get("ACTIVE_ARCHIVE_REFRESH_HOURS"
 TITLE_TASK_MAX_WORKERS = int(os.environ.get("TITLE_TASK_MAX_WORKERS", "3"))
 BACKFILL_PLAYERS_PER_RUN = int(os.environ.get("BACKFILL_PLAYERS_PER_RUN", "10"))
 BACKFILL_MONTHS_PER_PLAYER = int(os.environ.get("BACKFILL_MONTHS_PER_PLAYER", "6"))
-SILVER_BUCKET_COUNT = int(os.environ.get("SILVER_BUCKET_COUNT", "16"))
+PARQUET_BUCKET_COUNT = int(os.environ.get("PARQUET_BUCKET_COUNT", os.environ.get("SILVER_BUCKET_COUNT", "16")))
 
 
 def utc_now() -> datetime:
@@ -78,65 +79,23 @@ def player_games_prefix(username: str) -> str:
     return f"{RAW_PREFIX}/player_games/{username}/"
 
 
-def silver_title_roster_key(title: str, ds: str) -> str:
-    return f"{SILVER_PREFIX}/title_roster_daily/snapshot_date={ds}/title={title}/part-000.parquet"
+def bronze_roster_daily_key(title: str, ds: str) -> str:
+    return f"{BRONZE_PREFIX}/roster_daily/snapshot_date={ds}/title={title}/part-000.parquet"
 
 
-def silver_games_core_prefix(month_key: str) -> str:
+def bronze_games_core_prefix(month_key: str) -> str:
     year, month = split_month_key(month_key)
-    return f"{SILVER_PREFIX}/games_core/year={year}/month={month}/"
+    return f"{BRONZE_PREFIX}/games_core/year={year}/month={month}/"
 
 
-def silver_games_core_key(month_key: str, bucket: str) -> str:
-    return f"{silver_games_core_prefix(month_key)}bucket={bucket}/part-000.parquet"
+def bronze_games_core_key(month_key: str, bucket: str) -> str:
+    return f"{bronze_games_core_prefix(month_key)}bucket={bucket}/part-000.parquet"
 
 
-def silver_player_games_prefix(month_key: str, title: str | None = None) -> str:
+def bronze_player_game_facts_prefix(month_key: str) -> str:
     year, month = split_month_key(month_key)
-    base = f"{SILVER_PREFIX}/player_games/year={year}/month={month}/"
-    if title:
-        return f"{base}title={title}/"
-    return base
+    return f"{BRONZE_PREFIX}/player_game_facts/year={year}/month={month}/"
 
 
-def silver_player_games_key(month_key: str, bucket: str, title: str | None = None) -> str:
-    return f"{silver_player_games_prefix(month_key, title)}bucket={bucket}/part-000.parquet"
-
-
-def silver_player_month_prefix(month_key: str, title: str | None = None) -> str:
-    year, month = split_month_key(month_key)
-    base = f"{SILVER_PREFIX}/player_month/year={year}/month={month}/"
-    if title:
-        return f"{base}title={title}/"
-    return base
-
-
-def silver_player_month_key(month_key: str, bucket: str, title: str | None = None) -> str:
-    return f"{silver_player_month_prefix(month_key, title)}bucket={bucket}/part-000.parquet"
-
-
-def gold_title_month_activity_prefix(month_key: str) -> str:
-    year, month = split_month_key(month_key)
-    return f"{GOLD_PREFIX}/title_month_activity/year={year}/month={month}/"
-
-
-def gold_title_month_activity_key(month_key: str) -> str:
-    return f"{gold_title_month_activity_prefix(month_key)}part-000.parquet"
-
-
-def gold_title_month_rating_volatility_prefix(month_key: str) -> str:
-    year, month = split_month_key(month_key)
-    return f"{GOLD_PREFIX}/title_month_rating_volatility/year={year}/month={month}/"
-
-
-def gold_title_month_rating_volatility_key(month_key: str) -> str:
-    return f"{gold_title_month_rating_volatility_prefix(month_key)}part-000.parquet"
-
-
-def gold_title_month_color_performance_prefix(month_key: str) -> str:
-    year, month = split_month_key(month_key)
-    return f"{GOLD_PREFIX}/title_month_color_performance/year={year}/month={month}/"
-
-
-def gold_title_month_color_performance_key(month_key: str) -> str:
-    return f"{gold_title_month_color_performance_prefix(month_key)}part-000.parquet"
+def bronze_player_game_facts_key(month_key: str, bucket: str) -> str:
+    return f"{bronze_player_game_facts_prefix(month_key)}bucket={bucket}/part-000.parquet"

@@ -1,0 +1,43 @@
+name: chess_medallion
+version: 1.0.0
+config-version: 2
+
+profile: chess_medallion
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+seed-paths: ["seeds"]
+snapshot-paths: ["snapshots"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+
+target-path: target
+clean-targets:
+  - target
+  - dbt_packages
+  - logs
+
+vars:
+  month_keys: []
+  snapshot_date: null
+
+models:
+  chess_medallion:
+    bronze:
+      +materialized: view
+      +schema: "{{ env_var('DBT_ATHENA_BRONZE_SCHEMA', 'chess_bronze') }}"
+      +tags: ["bronze"]
+    silver:
+      +materialized: incremental
+      +incremental_strategy: insert_overwrite
+      +table_type: hive
+      +format: parquet
+      +schema: "{{ env_var('DBT_ATHENA_SILVER_SCHEMA', 'chess_silver') }}"
+      +tags: ["silver"]
+    gold:
+      +materialized: incremental
+      +incremental_strategy: insert_overwrite
+      +table_type: hive
+      +format: parquet
+      +schema: "{{ env_var('DBT_ATHENA_GOLD_SCHEMA', 'chess_gold') }}"
+      +tags: ["gold"]

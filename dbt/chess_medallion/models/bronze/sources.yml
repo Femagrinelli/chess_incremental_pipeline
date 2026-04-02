@@ -1,0 +1,10 @@
+version: 2
+
+sources:
+  - name: bronze_external
+    database: "{{ env_var('DBT_ATHENA_CATALOG', 'awsdatacatalog') }}"
+    schema: "{{ env_var('DBT_ATHENA_SOURCE_SCHEMA', 'chess_bronze_external') }}"
+    tables:
+      - name: roster_daily_external
+      - name: games_core_external
+      - name: player_game_facts_external

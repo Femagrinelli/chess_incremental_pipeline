@@ -56,13 +56,21 @@ if grep -q "^S3_BUCKET=your_existing_s3_bucket$" .env; then
     error "S3_BUCKET is still the example value."
 fi
 
+if grep -q "^DBT_ATHENA_S3_STAGING_DIR=$" .env; then
+    error "DBT_ATHENA_S3_STAGING_DIR must point to a writable S3 staging prefix."
+fi
+
+if grep -q "^DBT_ATHENA_S3_STAGING_DIR=s3://your_existing_s3_bucket/dbt-athena-staging/$" .env; then
+    error "DBT_ATHENA_S3_STAGING_DIR is still the example value."
+fi
+
 header "[ 3/5 ] Creating local directories"
 mkdir -p airflow/dags
 mkdir -p airflow/logs
 mkdir -p airflow/plugins
 mkdir -p scripts
-mkdir -p sql
-mkdir -p ui
+mkdir -p dbt/chess_medallion
+mkdir -p dbt/profiles
 chmod -R 777 airflow/logs
 success "Directories are ready."
 
@@ -109,13 +117,14 @@ echo -e "    make ps"
 echo -e "    make trigger-bootstrap"
 echo -e "    make trigger-core"
 echo -e "    make trigger-backfill"
-echo -e "    make trigger-silver"
-echo -e "    make trigger-silver-backfill MONTH_KEY=2026-02"
-echo -e "    make trigger-silver-backfill SILVER_CONF='{\"year\":\"2026\"}'"
-echo -e "    make trigger-gold"
-echo -e "    make trigger-gold-backfill GOLD_CONF='{\"year\":\"2026\"}'"
-echo -e "    make duckdb-list"
-echo -e "    make duckdb-file SQL_FILE=player_month_sample.sql"
-echo -e "    make duckdb-query SQL='SELECT 1'"
-echo -e "    make duckdb-ui-up"
+echo -e "    make trigger-bronze"
+echo -e "    make trigger-bronze-backfill MONTH_KEY=2026-02"
+echo -e "    make trigger-bronze-backfill BRONZE_CONF='{\"year\":\"2026\"}'"
+echo -e "    make trigger-dbt-silver"
+echo -e "    make trigger-dbt-silver-backfill MONTH_KEY=2026-02"
+echo -e "    make trigger-dbt-silver-backfill DBT_SILVER_CONF='{\"year\":\"2026\"}'"
+echo -e "    make trigger-dbt-gold"
+echo -e "    make trigger-dbt-gold-backfill DBT_GOLD_CONF='{\"year\":\"2026\"}'"
+echo -e "    make dbt-debug"
+echo -e "    make dbt-ls"
 echo -e "    make down"

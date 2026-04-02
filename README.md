@@ -1,17 +1,8 @@
 # Chess Incremental Data Platform
 
-An Airflow + AWS S3 data engineering project for Chess.com titled-player ingestion.
+An Airflow + AWS S3 + dbt data engineering project for Chess.com titled-player ingestion.
 
-This version is designed around two goals: keep the raw layer complete while avoiding wasteful daily API calls, and materialize a reusable silver layer in parquet for downstream analytics.
-
-## What This Version Optimizes
-
-- `titled_players` is stored as a true daily CDC snapshot.
-- `player_archives` is refreshed only for new, active, or stale players.
-- `player_games` is fetched daily only for players who are active in the current month.
-- Historical months are drained through a controlled backfill queue instead of re-scanning everyone every day.
-- Daily DAGs use deterministic keys plus manifest files, so they do not need large `LIST` operations in S3.
-- The existing legacy `raw/` bucket layout is reused instead of re-downloading history.
+The project keeps the legacy raw landing zone, adds a structured bronze parquet layer, and uses dbt with a medallion architecture for bronze, silver, and gold models in Athena.
 
 ## Architecture
 
@@ -26,532 +17,422 @@ This version is designed around two goals: keep the raw layer complete while avo
                                       |
                                       v
                     +---------------------------------------+
-                    |            Airflow DAGs               |
+                    |         Airflow Ingestion DAGs        |
                     |---------------------------------------|
-                    | Bronze: titled / archives / games     |
-                    | Silver: roster / player_games / month  |
+                    | titled snapshots                      |
+                    | archive refresh                       |
+                    | current-month games                   |
+                    | historical backfill                   |
                     +----------+----------------------------+
                                |
-                +--------------+------------------+----------------------+
-                |                                 |                      |
-                v                                 v                      v
-   +-------------------------------+   +-------------------------------+   +-------------------------------+
-   | S3 Raw / Bronze               |   | S3 State / Control            |   | S3 Silver / Parquet          |
-   |-------------------------------|   |-------------------------------|   |-------------------------------|
-   | titled_players CDC snapshots  |   | title_state/title=GM          |   | title_roster_daily           |
-   | player_archives change-only   |   | player_index/username=...     |   | player_games                 |
-   | player_games by year/month    |   | backfill counters + ETags     |   | player_month                 |
-   +-------------------------------+   +-------------------------------+   +-------------------------------+
-                                                                                         |
-                                                                                         v
-                                                                            +-------------------------------+
-                                                                            | Future Gold / Analytics       |
-                                                                            |-------------------------------|
-                                                                            | title trends                  |
-                                                                            | white vs black performance    |
-                                                                            | rating volatility             |
-                                                                            +-------------------------------+
+                               v
+                    +---------------------------------------+
+                    |        S3 Raw + State Layer           |
+                    |---------------------------------------|
+                    | raw/titled_players                    |
+                    | raw/player_archives                   |
+                    | raw/player_games                      |
+                    | state/chess_com/...                   |
+                    +----------+----------------------------+
+                               |
+                               v
+                    +---------------------------------------+
+                    |       Airflow Bronze DAGs             |
+                    |---------------------------------------|
+                    | bronze_roster_daily                   |
+                    | bronze_games_current_month_daily      |
+                    | bronze_games_month_backfill           |
+                    +----------+----------------------------+
+                               |
+                               v
+                    +---------------------------------------+
+                    |        S3 Bronze Parquet              |
+                    |---------------------------------------|
+                    | bronze/chess_com/roster_daily         |
+                    | bronze/chess_com/games_core           |
+                    | bronze/chess_com/player_game_facts    |
+                    +----------+----------------------------+
+                               |
+                               v
+                    +---------------------------------------+
+                    |        dbt Medallion Models           |
+                    |---------------------------------------|
+                    | bronze views over Athena sources      |
+                    | silver cleaned fact tables            |
+                    | gold analytical marts                 |
+                    +----------+----------------------------+
+                               |
+               +---------------+------------------+
+               |                                  |
+               v                                  v
+   +-------------------------------+   +-------------------------------+
+   | Athena / Glue Catalog         |   | S3 Silver / Gold Parquet      |
+   |-------------------------------|   |-------------------------------|
+   | chess_bronze_external         |   | silver/chess_com/...          |
+   | chess_bronze                  |   | gold/chess_com/...            |
+   | chess_silver                  |   +-------------------------------+
+   | chess_gold                    |
+   +-------------------------------+
 ```
 
-## Why This Structure Is Better
+## Medallion Layout
 
-### 1. Daily roster is still CDC and stays compatible with the existing bucket layout
+### Raw
 
-Every title endpoint is fetched every day and written to:
+The project keeps the legacy raw JSON layout:
 
 ```text
-raw/titled_players/GM/2026-03-29.json
+raw/
+├── titled_players/{TITLE}/{YYYY-MM-DD}.json
+├── player_archives/{username}/{YYYY-MM-DD}.json
+├── player_archives/{username}/{YYYY}/{MM}.json
+└── player_games/{username}/{YYYY}/{MM}.json
 ```
 
-This gives you a full historical roster trail.
+### State
 
-### 2. Archives are not fetched for every player every day
-
-The hot manifest for each title is stored at:
+The incremental control layer stays under:
 
 ```text
-state/chess_com/title_state/title=GM/current.json
+state/chess_com/
+├── title_state/title={TITLE}/current.json
+└── player_index/username_prefix={xx}/username={username}/index.json
 ```
 
-That manifest tracks:
+### Bronze
 
-- first time a player was seen
-- last roster snapshot date
-- last time archives were checked
-- whether the player is active in the current month
-- the latest ETag and Last-Modified for current-month games
-- whether historical backfill is still pending
-
-Because of that manifest, the archive DAG only refreshes:
-
-- newly discovered players
-- players who already have current-month activity
-- players whose archive state is stale
-
-### 3. Current-month games are synced only for active players
-
-If a player does not have the current month in their archive list, the daily games DAG skips them.
-
-If they do, the daily games DAG calls:
+Bronze is the first structured parquet layer. It is still close to the source, but flattened and deduplicated enough to support modeling.
 
 ```text
-/player/{username}/games/{YYYY}/{MM}
+bronze/chess_com/
+├── roster_daily/
+│   └── snapshot_date=YYYY-MM-DD/title=GM/part-000.parquet
+├── games_core/
+│   └── year=YYYY/month=MM/bucket=00/part-000.parquet
+└── player_game_facts/
+    └── year=YYYY/month=MM/bucket=00/part-000.parquet
 ```
 
-using conditional headers (`If-None-Match`, `If-Modified-Since`) when possible.
+Datasets:
 
-If Chess.com returns `304 Not Modified`, the pipeline updates only state, not the raw object.
+- `roster_daily`: one row per titled player per roster snapshot.
+- `games_core`: one row per unique Chess.com game.
+- `player_game_facts`: one row per player per game, including opponent, color, rating, and score.
 
-### 4. Historical months are queue-based
+### Silver
 
-Instead of re-reading old months over and over, archive changes create a small per-player queue in:
+Silver is now strictly the cleaned, structured layer.
 
 ```text
-state/chess_com/player_index/username_prefix=ve/username=veselintopalov359/index.json
+silver/chess_com/
+├── roster_daily/
+├── games_core/
+└── player_game_facts/
 ```
 
-The backfill DAG drains that queue gradually, with caps controlled by:
+Datasets:
 
-- `BACKFILL_PLAYERS_PER_RUN`
-- `BACKFILL_MONTHS_PER_PLAYER`
+- `silver_roster_daily`: de-duplicated roster snapshots for downstream joins.
+- `silver_games_core`: canonical game fact table, partitioned by year and month.
+- `silver_player_game_facts`: cleaned titled-player-per-game fact table, partitioned by year and month.
 
-That makes the first bootstrap safe on a small VPS and lets you speed up later if needed.
+### Gold
 
-## Legacy Raw Layout Reused By This Project
+Gold is now the presentation layer for reusable analytics.
 
 ```text
-chess-lake/
-├── raw/
-│   ├── titled_players/
-│   │   └── GM/
-│   │       └── 2026-03-29.json
-│   ├── player_archives/
-│   │   └── veselintopalov359/
-│   │       ├── 2026-03-29.json
-│   │       └── 2026/
-│   │           └── 02.json
-│   └── player_games/
-│       └── veselintopalov359/
-│           └── 2022/
-│               └── 09.json
-└── state/
-    └── chess_com/
-        ├── title_state/
-        │   └── title=GM/current.json
-        └── player_index/
-            └── username_prefix=ve/username=veselintopalov359/index.json
+gold/chess_com/
+├── title_month_activity/
+├── title_month_rating_volatility/
+└── title_month_color_performance/
 ```
 
-Notes:
+Datasets:
 
-- `titled_players` stays in the exact legacy layout.
-- `player_games` stays in the exact legacy layout.
-- `player_archives` is read from both legacy variants during bootstrap:
-  - `raw/player_archives/{username}/{YYYY-MM-DD}.json`
-  - `raw/player_archives/{username}/{YYYY}/{MM}.json`
-- New incremental refreshes write the daily archive snapshot style only when the archive list changes.
+- `gold_title_month_activity`
+- `gold_title_month_rating_volatility`
+- `gold_title_month_color_performance`
 
-## Silver Layout Produced By This Project
+## Why This Structure Works Better
+
+- Raw remains a full historical landing zone and does not need to be re-downloaded.
+- State keeps the daily Chess.com call volume low.
+- Bronze is structured once from raw and reused everywhere else.
+- Silver stays focused on cleaning, shaping, and canonical facts.
+- Gold stays focused on business-ready aggregates.
+- dbt owns the model layer and the medallion contracts instead of mixing transformations into Python DAG code.
+
+## dbt Project Structure
 
 ```text
-chess-lake/
-└── silver/
-    └── chess_com/
-        ├── title_roster_daily/
-        │   └── snapshot_date=2026-03-29/
-        │       └── title=GM/part-000.parquet
-        ├── player_games/
-        │   └── year=2026/
-        │       └── month=03/
-        │           └── title=GM/
-        │               └── bucket=00/part-000.parquet
-        └── player_month/
-            └── year=2026/
-                └── month=03/
-                    └── title=GM/
-                        └── bucket=00/part-000.parquet
+dbt/
+├── profiles/
+│   └── profiles.yml
+└── chess_medallion/
+    ├── dbt_project.yml
+    ├── macros/
+    │   ├── filters.sql
+    │   └── register_bronze_external_tables.sql
+    └── models/
+        ├── bronze/
+        ├── silver/
+        └── gold/
 ```
 
-The silver datasets are organized as follows:
+Model responsibilities:
 
-- `title_roster_daily`: one row per player per title snapshot day.
-- `player_games`: one row per titled player per game, sourced from that player's raw monthly file.
-- `player_month`: one row per titled player per month, pre-aggregated for trend analysis.
-
-The `player_games` and `player_month` datasets are partitioned by month and title so the daily materialization can run in smaller chunks on a modest VPS.
-
-## Gold Layout Produced By This Project
-
-```text
-chess-lake/
-└── gold/
-    └── chess_com/
-        ├── title_month_activity/
-        │   └── year=2026/
-        │       └── month=03/
-        │           └── part-000.parquet
-        ├── title_month_rating_volatility/
-        │   └── year=2026/
-        │       └── month=03/
-        │           └── part-000.parquet
-        └── title_month_color_performance/
-            └── year=2026/
-                └── month=03/
-                    └── part-000.parquet
-```
-
-The gold marts are organized at title-month grain:
-
-- `title_month_activity`: activity and population metrics ready for trend charts.
-- `title_month_rating_volatility`: intramonth rating movement metrics by title.
-- `title_month_color_performance`: white-vs-black score metrics by title and month.
+- `models/bronze`: dbt views over Athena external tables registered on top of the bronze parquet files.
+- `models/silver`: cleaned and partitioned analytical fact tables.
+- `models/gold`: title-month marts for dashboards and BI.
 
 ## Project Structure
 
 ```text
 chess_incremental_pipeline/
-├── Dockerfile
-├── docker-compose.yml
-├── .env.example
-├── Makefile
-├── setup.sh
-├── requirements.txt
-├── README.md
 ├── airflow/
 │   └── dags/
-│       ├── bootstrap_legacy_raw_state.py
-│       ├── titled_players_daily.py
-│       ├── player_archives_incremental_daily.py
-│       ├── player_games_current_month_daily.py
-│       ├── player_games_backfill.py
-│       ├── silver_title_roster_daily.py
-│       ├── silver_games_current_month_daily.py
-│       ├── silver_games_month_backfill.py
-│       ├── gold_title_month_current_daily.py
-│       └── gold_title_month_backfill.py
-└── scripts/
-    ├── config.py
-    ├── chess_client.py
-    ├── storage_client.py
-    ├── state_store.py
-    ├── ingestion_service.py
-    ├── silver_service.py
-    └── gold_service.py
+├── dbt/
+│   ├── profiles/
+│   └── chess_medallion/
+├── scripts/
+├── docker-compose.yml
+├── Dockerfile
+├── Makefile
+├── requirements.txt
+├── setup.sh
+└── .env.example
 ```
 
-## DAG Design
+## Prerequisites
 
-### `bootstrap_legacy_raw_state`
+- Docker and Docker Compose on the VPS
+- AWS credentials with access to:
+  - S3
+  - Athena
+  - Glue Data Catalog
+- An existing S3 bucket for raw, state, bronze, silver, gold, and dbt staging
 
-- Schedule: manual only
-- One task per title.
-- Reads the latest legacy `raw/titled_players/{TITLE}/{YYYY-MM-DD}.json`.
-- Reads the latest legacy archive object and stored game months for each current player.
-- Creates the new `state/chess_com/...` files without re-downloading Chess.com history.
+## Environment
 
-### `titled_players_daily`
-
-- Schedule: `00:05 UTC`
-- One task per title.
-- Calls `/pub/titled/{title}`.
-- Stores a full raw CDC snapshot in the existing legacy path.
-- Updates the title manifest with new and removed players.
-
-### `player_archives_incremental_daily`
-
-- Schedule: `00:35 UTC`
-- One task per title.
-- Refreshes archives only for new, active, or stale players.
-- Stores raw archive snapshots only when the archive list changes.
-- Updates backfill queue counts.
-
-### `player_games_current_month_daily`
-
-- Schedule: `01:10 UTC`
-- One task per title.
-- Only processes players with current-month activity.
-- Uses `ETag` / `Last-Modified` for lighter syncs.
-- Overwrites the current month file only when the month payload changed.
-
-### `player_games_backfill`
-
-- Schedule: `02:30 UTC`
-- One task per title.
-- Processes only queued historical months.
-- Safe to trigger manually if you want to accelerate the bootstrap.
-
-### `silver_title_roster_daily`
-
-- Schedule: `00:20 UTC`
-- One task per title.
-- Reads the same daily raw titled-player snapshot and writes parquet for the roster CDC layer.
-
-### `silver_games_current_month_daily`
-
-- Schedule: `04:15 UTC`
-- One task per title, chained sequentially to keep VPS load predictable.
-- Reads current-month raw game files for titled players in that title and writes:
-  - `player_games`
-  - `player_month`
-- Uses a player-centric silver shape instead of a single global game dedup in the hot path.
-
-### `silver_games_month_backfill`
-
-- Schedule: manual only
-- Single task.
-- Rebuilds selected historical months from raw JSON already stored in S3.
-- Processes month selections title by title to avoid one large all-player task.
-- The Airflow UI trigger form exposes `month_key`, `month_keys`, `year`, `years`, `start_month`, and `end_month` as DAG params.
-- Accepts any of the following DAG run config patterns:
-
-```json
-{"month_key": "2026-02"}
-```
-
-```json
-{"month_keys": ["2026-01", "2026-02", "2026-03"]}
-```
-
-```json
-{"year": "2026"}
-```
-
-```json
-{"years": ["2025", "2026"]}
-```
-
-```json
-{"start_month": "2025-01", "end_month": "2025-12"}
-```
-
-### `gold_title_month_current_daily`
-
-- Schedule: `05:30 UTC`
-- Single task.
-- Reads current-month `silver/player_month/...` partitions.
-- Writes the current-month gold marts for dashboards and recurring analysis.
-
-### `gold_title_month_backfill`
-
-- Schedule: manual only
-- Single task.
-- Rebuilds selected historical gold marts from silver parquet already stored in S3.
-- Exposes the same Airflow UI params as the silver backfill DAG:
-  - `month_key`
-  - `month_keys`
-  - `year`
-  - `years`
-  - `start_month`
-  - `end_month`
-
-## Step-by-Step VPS Setup
-
-### 1. Enter the project folder
-
-```bash
-cd /root/chess_incremental_pipeline
-```
-
-### 2. Create a local environment file
+Copy the example file and edit the real runtime values:
 
 ```bash
 cp .env.example .env
 ```
 
-Update at least these values:
+Important variables:
 
-- `POSTGRES_PASSWORD`
-- `AIRFLOW_ADMIN_PASSWORD`
 - `AWS_ACCESS_KEY_ID`
 - `AWS_SECRET_ACCESS_KEY`
+- `AWS_REGION`
 - `S3_BUCKET`
-- `CHESS_API_USER_AGENT`
-- `FERNET_KEY`
-- `SECRET_KEY`
+- `RAW_PREFIX`
+- `BRONZE_PREFIX`
+- `STATE_PREFIX`
 - `SILVER_PREFIX`
-- `SILVER_BUCKET_COUNT`
-- `AIRFLOW__CORE__DAG_FILE_PROCESSOR_TIMEOUT`
-- `AIRFLOW__SCHEDULER__STALE_DAG_THRESHOLD`
+- `GOLD_PREFIX`
+- `PARQUET_BUCKET_COUNT`
+- `DBT_ATHENA_CATALOG`
+- `DBT_ATHENA_SOURCE_SCHEMA`
+- `DBT_ATHENA_BRONZE_SCHEMA`
+- `DBT_ATHENA_SILVER_SCHEMA`
+- `DBT_ATHENA_GOLD_SCHEMA`
+- `DBT_ATHENA_S3_STAGING_DIR`
+- `DBT_ATHENA_WORKGROUP`
 
-Important:
+`DBT_ATHENA_S3_STAGING_DIR` should point to a writable staging prefix, for example:
 
-- `S3_BUCKET` should already exist in AWS.
-- Leave `S3_ENDPOINT_URL` blank for AWS S3. Only set this value if you later point the project to another S3-compatible object store like MinIO.
-- On small VPS instances, keep `AIRFLOW__CORE__DAG_FILE_PROCESSOR_TIMEOUT` higher than `AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT`. The defaults in this repo already do that.
+```text
+s3://my-bucket/dbt-athena-staging/
+```
 
-### 3. Start the stack
+## Setup
+
+Start the stack:
 
 ```bash
 bash setup.sh
 ```
 
-This script will:
+Useful commands:
 
-- generate Airflow keys if needed
-- build the Airflow image
-- start PostgreSQL, Airflow webserver and scheduler
+```bash
+make ps
+make logs
+make logs-webserver
+make logs-scheduler
+make dbt-debug
+make dbt-ls
+```
 
-### 4. Run the one-time bootstrap first
+## Airflow DAGs
 
-- Build state from an existing raw bucket:
+### Ingestion
+
+- `titled_players_daily`
+- `player_archives_incremental_daily`
+- `player_games_current_month_daily`
+- `player_games_backfill`
+- `bootstrap_legacy_raw_state`
+
+### Bronze Parquet
+
+- `bronze_roster_daily`
+- `bronze_games_current_month_daily`
+- `bronze_games_month_backfill`
+
+### dbt Silver
+
+- `dbt_silver_current_daily`
+- `dbt_silver_backfill`
+
+### dbt Gold
+
+- `dbt_gold_current_daily`
+- `dbt_gold_backfill`
+
+## First Deployment Order
+
+1. Bootstrap the state layer from the existing raw bucket:
 
 ```bash
 make trigger-bootstrap
 ```
 
-That bootstrap reads the legacy raw files already in S3 and creates the `state/` layer used by the new incremental DAGs.
-
-### 5. Open the services
-
-- Airflow UI: `http://<your-vps-ip>:8080`
-- If running on your machine: 'localhost:8080'
-
-### 6. Run the new daily flow
-
-For the core daily flow:
+2. Run the ingestion flow:
 
 ```bash
 make trigger-core
 ```
 
-For historical queue draining:
+3. If historical raw game months still need to be drained from the queue:
 
 ```bash
 make trigger-backfill
 ```
 
-For the silver daily flow:
+4. Build the bronze parquet layer:
 
 ```bash
-make trigger-silver
+make trigger-bronze
 ```
 
-For a manual silver month rebuild:
+5. Build silver in dbt:
 
 ```bash
-make trigger-silver-backfill
+make trigger-dbt-silver
 ```
 
-For a specific month:
+6. Build gold in dbt:
 
 ```bash
-make trigger-silver-backfill MONTH_KEY=2026-02
+make trigger-dbt-gold
 ```
 
-For a year:
+## Manual Backfills
+
+### Bronze Month Backfill
+
+Single month:
 
 ```bash
-make trigger-silver-backfill SILVER_CONF='{"year":"2026"}'
+make trigger-bronze-backfill MONTH_KEY=2026-02
 ```
 
-For a range:
+Year:
 
 ```bash
-make trigger-silver-backfill SILVER_CONF='{"start_month":"2025-01","end_month":"2025-12"}'
+make trigger-bronze-backfill BRONZE_CONF='{"year":"2026"}'
 ```
 
-For the gold daily marts:
+Range:
 
 ```bash
-make trigger-gold
+make trigger-bronze-backfill BRONZE_CONF='{"start_month":"2025-01","end_month":"2025-12"}'
 ```
 
-For a manual gold month rebuild:
+### Silver dbt Backfill
+
+Single month:
 
 ```bash
-make trigger-gold-backfill
+make trigger-dbt-silver-backfill MONTH_KEY=2026-02
 ```
 
-For a gold year rebuild:
+Year:
 
 ```bash
-make trigger-gold-backfill GOLD_CONF='{"year":"2026"}'
+make trigger-dbt-silver-backfill DBT_SILVER_CONF='{"year":"2026"}'
 ```
 
-When triggering from the Airflow UI, these same fields can be filled directly in the DAG params form, or pasted as JSON in the trigger config dialog.
-
-## First Bootstrap Strategy
-
-The best first-load strategy is:
-
-1. Run `bootstrap_legacy_raw_state` once
-2. Run `titled_players_daily`
-3. Run `player_archives_incremental_daily`
-4. Let `player_games_backfill` drain any missing history gradually
-5. Run `player_games_current_month_daily`
-6. Run `silver_title_roster_daily`
-7. Run `silver_games_current_month_daily`
-
-## Query Layer Options
-
-The silver layer is stored as parquet so it can be queried by several tools later:
-
-- DuckDB for local SQL on parquet, especially for notebooks and ad hoc analysis.
-- Athena for serverless SQL directly on S3.
-- Polars or Pandas for Python-based exploration.
-- dbt-duckdb or dbt-athena if the project later moves toward a model-driven analytics layer.
-
-## DuckDB Queries
-
-DuckDB is wired into the Airflow image so the VPS can query silver and gold parquet directly in S3.
-
-After pulling changes, rebuild the image:
+Range:
 
 ```bash
-docker compose build
-docker compose up -d
+make trigger-dbt-silver-backfill DBT_SILVER_CONF='{"start_month":"2025-01","end_month":"2025-12"}'
 ```
 
-List the bundled sample SQL files:
+### Gold dbt Backfill
+
+Single month:
 
 ```bash
-make duckdb-list
+make trigger-dbt-gold-backfill MONTH_KEY=2026-02
 ```
 
-Start the query UI:
+Year:
 
 ```bash
-make duckdb-ui-up
+make trigger-dbt-gold-backfill DBT_GOLD_CONF='{"year":"2026"}'
 ```
 
-Then open:
-
-```text
-http://<your-vps-ip>:8501
-```
-
-Run a sample query file:
+Range:
 
 ```bash
-make duckdb-file SQL_FILE=activity_trends_dashboard.sql
+make trigger-dbt-gold-backfill DBT_GOLD_CONF='{"start_month":"2025-01","end_month":"2025-12"}'
 ```
 
-Run an inline query:
+For large historical rebuilds, prefer year-sized or smaller backfill windows. Athena Hive incremental models are partition-based, so smaller runs are safer and easier to retry.
 
-```bash
-make duckdb-query SQL="SELECT * FROM read_parquet('s3://your-bucket/gold/chess_com/title_month_activity/year=2026/month=03/part-000.parquet')"
-```
+## Airflow UI Parameters
 
-The helper script automatically reads `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `S3_BUCKET`, `SILVER_PREFIX`, and `GOLD_PREFIX` from the container environment.
+The manual backfill DAGs accept parameters directly in the Airflow UI when using `Trigger DAG`.
 
-The optional Streamlit UI uses the same DuckDB + S3 configuration and lets you:
+Supported fields:
 
-- explore dashboard tabs for:
-  - activity trends
-  - rating volatility by title
-  - white-vs-black performance by title
-- load saved SQL templates from `sql/`
-- edit SQL in a browser
-- run queries against gold or silver parquet in S3
-- download the result as CSV
+- `month_key`
+- `month_keys`
+- `year`
+- `years`
+- `start_month`
+- `end_month`
 
-Useful starter SQL files:
+Examples:
 
-- `player_month_sample.sql`
-- `activity_trends_dashboard.sql`
-- `rating_volatility_by_title.sql`
-- `white_black_performance_by_title.sql`
+- `month_key = 2026-02`
+- `month_keys = ["2026-01", "2026-02", "2026-03"]`
+- `year = 2026`
+- `years = ["2025", "2026"]`
+- `start_month = 2025-01` and `end_month = 2025-12`
+
+## Current Analytical Outputs
+
+The modeled stack now supports these analyses cleanly:
+
+- activity trends by title and month
+- rating volatility by title and month
+- white vs black performance by title and month
+
+The next layer can extend from the same silver facts into:
+
+- title-vs-title matchups
+- opening performance by title
+- roster churn by title
+- head-to-head marts
+- PGN-derived features after a separate parsing step
 
 ## Notes
 
-This design is aligned with Chess.com PubAPI behavior: the official docs note that endpoints include `ETag` and `Last-Modified`, can return `304 Not Modified`, refresh at most every 12 hours, and may rate-limit parallel calls.
+- The project reuses the legacy raw bucket layout instead of re-downloading historical Chess.com data.
+- Bronze backfills and dbt backfills are month-scoped so the stack can be controlled safely on a modest VPS.
+- The silver layer no longer contains pre-aggregated monthly marts.
+- Gold no longer depends on a `player_month` shortcut table; it is built from `silver_player_game_facts`.

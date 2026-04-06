@@ -17,27 +17,27 @@ clean-targets:
   - dbt_packages
   - logs
 
+on-run-start:
+  - "{{ register_upstream_external_models() }}"
+
 vars:
+  month_key: null
   month_keys: []
   snapshot_date: null
 
 models:
   chess_medallion:
-    bronze:
-      +materialized: view
-      +schema: "{{ env_var('DBT_ATHENA_BRONZE_SCHEMA', 'chess_bronze') }}"
-      +tags: ["bronze"]
+    staging:
+      +materialized: ephemeral
+      +schema: staging
+      +tags: ["staging"]
     silver:
-      +materialized: incremental
-      +incremental_strategy: insert_overwrite
-      +table_type: hive
+      +materialized: external
       +format: parquet
-      +schema: "{{ env_var('DBT_ATHENA_SILVER_SCHEMA', 'chess_silver') }}"
+      +schema: silver
       +tags: ["silver"]
     gold:
-      +materialized: incremental
-      +incremental_strategy: insert_overwrite
-      +table_type: hive
+      +materialized: external
       +format: parquet
-      +schema: "{{ env_var('DBT_ATHENA_GOLD_SCHEMA', 'chess_gold') }}"
+      +schema: gold
       +tags: ["gold"]

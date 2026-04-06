@@ -1,3 +1,5 @@
+{{ config(materialized='ephemeral') }}
+
 select
   cast(year as varchar) as year,
   lpad(cast(month as varchar), 2, '0') as month,
@@ -31,4 +33,7 @@ select
   cast(opponent_accuracy as double) as opponent_accuracy,
   is_titled_player,
   is_titled_opponent
-from {{ source('bronze_external', 'player_game_facts_external') }}
+from read_parquet(
+  's3://{{ env_var("S3_BUCKET") }}/{{ env_var("BRONZE_PREFIX", "warehouse/bronze") }}/player_game_facts/year=*/month=*/bucket=*/part-000.parquet',
+  hive_partitioning=true
+)

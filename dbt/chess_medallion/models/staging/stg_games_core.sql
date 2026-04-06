@@ -1,3 +1,5 @@
+{{ config(materialized='ephemeral') }}
+
 select
   cast(year as varchar) as year,
   lpad(cast(month as varchar), 2, '0') as month,
@@ -34,4 +36,7 @@ select
   cast(source_key_count as integer) as source_key_count,
   cast(source_player_count as integer) as source_player_count,
   source_player_usernames
-from {{ source('bronze_external', 'games_core_external') }}
+from read_parquet(
+  's3://{{ env_var("S3_BUCKET") }}/{{ env_var("BRONZE_PREFIX", "warehouse/bronze") }}/games_core/year=*/month=*/bucket=*/part-000.parquet',
+  hive_partitioning=true
+)

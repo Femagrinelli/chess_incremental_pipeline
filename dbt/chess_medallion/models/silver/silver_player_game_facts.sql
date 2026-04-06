@@ -1,13 +1,12 @@
 {{
   config(
-    external_location='s3://' ~ env_var('S3_BUCKET') ~ '/' ~ env_var('SILVER_PREFIX', 'silver/chess_com') ~ '/player_game_facts/',
-    partitioned_by=['year', 'month']
+    location=month_file_location(env_var('SILVER_PREFIX', 'warehouse/silver') ~ '/player_game_facts', var('month_key'))
   )
 }}
 
 with source_rows as (
   select *
-  from {{ ref('bronze_player_game_facts') }}
+  from {{ ref('stg_player_game_facts') }}
   where {{ month_key_filter('year', 'month') }}
 ),
 ranked as (

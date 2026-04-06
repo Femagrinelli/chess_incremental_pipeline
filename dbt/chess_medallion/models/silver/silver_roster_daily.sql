@@ -1,13 +1,12 @@
 {{
   config(
-    external_location='s3://' ~ env_var('S3_BUCKET') ~ '/' ~ env_var('SILVER_PREFIX', 'silver/chess_com') ~ '/roster_daily/',
-    partitioned_by=['snapshot_date', 'title']
+    location=snapshot_file_location(env_var('SILVER_PREFIX', 'warehouse/silver') ~ '/roster_daily', var('snapshot_date'))
   )
 }}
 
 with source_rows as (
   select *
-  from {{ ref('bronze_roster_daily') }}
+  from {{ ref('stg_roster_daily') }}
   where {{ snapshot_date_filter('snapshot_date') }}
 ),
 ranked as (

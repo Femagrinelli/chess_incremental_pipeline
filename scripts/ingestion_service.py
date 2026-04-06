@@ -18,7 +18,8 @@ logger = logging.getLogger(__name__)
 
 ARCHIVE_DAILY_KEY_PATTERN = re.compile(r"^.*/(?P<date>\d{4}-\d{2}-\d{2})\.json$")
 ARCHIVE_MONTHLY_KEY_PATTERN = re.compile(r"^.*/(?P<year>\d{4})/(?P<month>\d{2})\.json$")
-GAME_KEY_PATTERN = re.compile(r"^.*/(?P<year>\d{4})/(?P<month>\d{2})\.json$")
+# Matches the legacy raw game key layout: .../{username}/{YYYY}/{MM}.json
+LEGACY_GAME_KEY_PATTERN = re.compile(r"^.*/(?P<year>\d{4})/(?P<month>\d{2})\.json$")
 
 
 def _hash_value(value) -> str:
@@ -56,10 +57,12 @@ def _latest_archive_key(username: str) -> str | None:
 
 
 def _stored_game_months(username: str) -> list[str]:
-    keys = storage_client.list_objects(config.player_games_prefix(username))
+    # Used only by the legacy bootstrap path — scans the old layout at
+    # raw/player_games/{username}/{year}/{month}.json to seed state.
+    keys = storage_client.list_objects(config.legacy_player_games_prefix(username))
     month_keys = []
     for key in keys:
-        match = GAME_KEY_PATTERN.match(key)
+        match = LEGACY_GAME_KEY_PATTERN.match(key)
         if match:
             month_keys.append(f"{match.group('year')}-{match.group('month')}")
     return sorted(set(month_keys))

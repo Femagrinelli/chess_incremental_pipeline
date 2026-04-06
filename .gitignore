@@ -7,3 +7,5 @@ airflow/logs/
 dbt/chess_medallion/target/
 dbt/chess_medallion/logs/
 dbt/chess_medallion/dbt_packages/
+duckdb/*.duckdb
+duckdb/*.duckdb.wal

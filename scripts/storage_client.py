@@ -118,6 +118,19 @@ def list_objects(prefix: str) -> list[str]:
     return keys
 
 
+def move_object(src_key: str, dst_key: str) -> None:
+    client = _get_client()
+    bucket = _get_bucket()
+    client.copy_object(
+        Bucket=bucket,
+        CopySource={"Bucket": bucket, "Key": src_key},
+        Key=dst_key,
+    )
+    client.delete_object(Bucket=bucket, Key=src_key)
+    logger.info("Moved s3://%s/%s -> s3://%s/%s", bucket, src_key, bucket, dst_key)
+
+
+
 def delete_prefix(prefix: str) -> int:
     keys = list_objects(prefix)
     if not keys:

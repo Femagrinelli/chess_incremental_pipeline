@@ -56,22 +56,18 @@ if grep -q "^S3_BUCKET=your_existing_s3_bucket$" .env; then
     error "S3_BUCKET is still the example value."
 fi
 
-if grep -q "^DBT_ATHENA_S3_STAGING_DIR=$" .env; then
-    error "DBT_ATHENA_S3_STAGING_DIR must point to a writable S3 staging prefix."
-fi
-
-if grep -q "^DBT_ATHENA_S3_STAGING_DIR=s3://your_existing_s3_bucket/dbt-athena-staging/$" .env; then
-    error "DBT_ATHENA_S3_STAGING_DIR is still the example value."
-fi
-
 header "[ 3/5 ] Creating local directories"
 mkdir -p airflow/dags
 mkdir -p airflow/logs
 mkdir -p airflow/plugins
 mkdir -p scripts
+mkdir -p sql
 mkdir -p dbt/chess_medallion
 mkdir -p dbt/profiles
+mkdir -p duckdb
+mkdir -p ui
 chmod -R 777 airflow/logs
+chmod 775 duckdb
 success "Directories are ready."
 
 header "[ 4/5 ] Building images"
@@ -125,6 +121,8 @@ echo -e "    make trigger-dbt-silver-backfill MONTH_KEY=2026-02"
 echo -e "    make trigger-dbt-silver-backfill DBT_SILVER_CONF='{\"year\":\"2026\"}'"
 echo -e "    make trigger-dbt-gold"
 echo -e "    make trigger-dbt-gold-backfill DBT_GOLD_CONF='{\"year\":\"2026\"}'"
+echo -e "    make trigger-dbt-gold-history DBT_GOLD_CONF='{\"years\":[\"2024\",\"2025\",\"2026\"]}'"
+echo -e "    make streamlit-up"
 echo -e "    make dbt-debug"
 echo -e "    make dbt-ls"
 echo -e "    make down"

@@ -1,7 +1,6 @@
 {{
   config(
-    external_location='s3://' ~ env_var('S3_BUCKET') ~ '/' ~ env_var('GOLD_PREFIX', 'gold/chess_com') ~ '/title_month_color_performance/',
-    partitioned_by=['year', 'month']
+    location=month_file_location(env_var('GOLD_PREFIX', 'warehouse/gold') ~ '/title_month_color_performance', var('month_key'))
   )
 }}
 

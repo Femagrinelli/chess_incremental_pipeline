@@ -15,7 +15,7 @@ x-airflow-common: &airflow-common
     AIRFLOW__WEBSERVER__SECRET_KEY: ${SECRET_KEY}
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
-    AIRFLOW__CORE__DEFAULT_TIMEZONE: UTC
+    AIRFLOW__CORE__DEFAULT_TIMEZONE: ${PIPELINE_TIMEZONE:-America/Sao_Paulo}
     AIRFLOW__CORE__PARALLELISM: ${AIRFLOW__CORE__PARALLELISM:-2}
     AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: ${AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG:-2}
     AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT: ${AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT:-120}
@@ -33,11 +33,10 @@ x-airflow-common: &airflow-common
     AWS_REGION: ${AWS_REGION}
     S3_BUCKET: ${S3_BUCKET}
     S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
-    RAW_PREFIX: ${RAW_PREFIX}
-    BRONZE_PREFIX: ${BRONZE_PREFIX:-bronze/chess_com}
-    STATE_PREFIX: ${STATE_PREFIX}
-    SILVER_PREFIX: ${SILVER_PREFIX:-silver/chess_com}
-    GOLD_PREFIX: ${GOLD_PREFIX:-gold/chess_com}
+    RAW_PREFIX: ${RAW_PREFIX:-raw}
+    STATE_PREFIX: ${STATE_PREFIX:-state}
+    WAREHOUSE_PREFIX: ${WAREHOUSE_PREFIX:-warehouse}
+    ARCHIVE_PREFIX: ${ARCHIVE_PREFIX:-archive}
     PARQUET_BUCKET_COUNT: ${PARQUET_BUCKET_COUNT:-16}
     CHESS_API_USER_AGENT: ${CHESS_API_USER_AGENT}
     CHESS_API_DELAY: ${CHESS_API_DELAY}
@@ -47,20 +46,16 @@ x-airflow-common: &airflow-common
     BACKFILL_PLAYERS_PER_RUN: ${BACKFILL_PLAYERS_PER_RUN}
     BACKFILL_MONTHS_PER_PLAYER: ${BACKFILL_MONTHS_PER_PLAYER}
     DBT_PROFILES_DIR: /opt/airflow/dbt/profiles
-    DBT_ATHENA_CATALOG: ${DBT_ATHENA_CATALOG:-awsdatacatalog}
-    DBT_ATHENA_SOURCE_SCHEMA: ${DBT_ATHENA_SOURCE_SCHEMA:-chess_bronze_external}
-    DBT_ATHENA_BRONZE_SCHEMA: ${DBT_ATHENA_BRONZE_SCHEMA:-chess_bronze}
-    DBT_ATHENA_SILVER_SCHEMA: ${DBT_ATHENA_SILVER_SCHEMA:-chess_silver}
-    DBT_ATHENA_GOLD_SCHEMA: ${DBT_ATHENA_GOLD_SCHEMA:-chess_gold}
-    DBT_ATHENA_S3_STAGING_DIR: ${DBT_ATHENA_S3_STAGING_DIR}
-    DBT_ATHENA_WORKGROUP: ${DBT_ATHENA_WORKGROUP:-primary}
-    DBT_ATHENA_THREADS: ${DBT_ATHENA_THREADS:-4}
+    DBT_DUCKDB_PATH: ${DBT_DUCKDB_PATH:-/opt/airflow/duckdb/chess_pipeline.duckdb}
+    DBT_DUCKDB_THREADS: ${DBT_DUCKDB_THREADS:-4}
   volumes:
     - ./airflow/dags:/opt/airflow/dags
     - ./airflow/logs:/opt/airflow/logs
     - ./airflow/plugins:/opt/airflow/plugins
     - ./scripts:/opt/airflow/scripts
+    - ./sql:/opt/airflow/sql
     - ./dbt:/opt/airflow/dbt
+    - ./duckdb:/opt/airflow/duckdb
   depends_on:
     postgres:
       condition: service_healthy
@@ -86,6 +81,8 @@ services:
   airflow-webserver:
     <<: *airflow-common
     container_name: chess_airflow_webserver
+    mem_limit: 1g
+    cpus: 1.0
     command:
       - bash
       - -c
@@ -111,12 +108,44 @@ services:
   airflow-scheduler:
     <<: *airflow-common
     container_name: chess_airflow_scheduler
+    mem_limit: 3g
+    cpus: 2.5
     command:
       - bash
       - -c
       - |
         airflow db migrate &&
         exec airflow scheduler
+
+  gold-dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: chess_gold_dashboard
+    entrypoint: []
+    env_file: .env
+    environment:
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      AWS_REGION: ${AWS_REGION}
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
+      S3_BUCKET: ${S3_BUCKET}
+      WAREHOUSE_PREFIX: ${WAREHOUSE_PREFIX:-warehouse}
+      PYTHONPATH: /opt/airflow/scripts
+    command:
+      - streamlit
+      - run
+      - /opt/airflow/ui/gold_dashboard.py
+      - --server.address=0.0.0.0
+      - --server.port=8501
+    ports:
+      - "127.0.0.1:8501:8501"
+    volumes:
+      - ./scripts:/opt/airflow/scripts
+      - ./ui:/opt/airflow/ui
+    restart: unless-stopped
+    profiles: ["tools"]
 
 volumes:
   postgres_data:

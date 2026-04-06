@@ -3,8 +3,11 @@ concat(cast({{ year_col }} as varchar), '-', lpad(cast({{ month_col }} as varcha
 {%- endmacro %}
 
 {% macro month_key_filter(year_col, month_col) -%}
+  {% set single_month_key = var('month_key', none) %}
   {% set month_keys = var('month_keys', []) %}
-  {% if month_keys and month_keys | length > 0 %}
+  {% if single_month_key %}
+    {{ month_key_expr(year_col, month_col) }} = '{{ single_month_key }}'
+  {% elif month_keys and month_keys | length > 0 %}
     {{ month_key_expr(year_col, month_col) }} in (
       {% for month_key in month_keys -%}
         '{{ month_key }}'{% if not loop.last %}, {% endif %}

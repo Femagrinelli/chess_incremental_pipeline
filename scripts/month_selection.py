@@ -11,6 +11,7 @@ from datetime import datetime
 import chess_client
 import config
 import state_store
+import storage_client
 
 logger = logging.getLogger(__name__)
 
@@ -65,25 +66,16 @@ def month_range(start_month: str, end_month: str) -> list[str]:
     return month_keys
 
 
-def available_month_keys_from_state() -> list[str]:
+def available_month_keys_from_s3() -> list[str]:
+    """Discover which months have raw game data by listing S3 year= prefixes."""
+    prefix = f"{config.RAW_PREFIX}/player_games/"
+    keys = storage_client.list_objects(prefix)
     month_keys: set[str] = set()
-    seen_usernames: set[str] = set()
-
-    for title in chess_client.VALID_TITLES:
-        state = state_store.load_title_state(title)
-        for username, player in state.get("players", {}).items():
-            if username in seen_usernames:
-                continue
-            seen_usernames.add(username)
-
-            current_month_key = player.get("current_month_key")
-            if current_month_key:
-                month_keys.add(validate_month_key(current_month_key))
-
-            player_index = state_store.load_player_index(username)
-            for month_key in player_index.get("stored_months", []):
-                month_keys.add(validate_month_key(month_key))
-
+    month_prefix_re = re.compile(r"year=(\d{4})/month=(\d{2})/")
+    for key in keys:
+        match = month_prefix_re.search(key)
+        if match:
+            month_keys.add(f"{match.group(1)}-{match.group(2)}")
     return sorted(month_keys)
 
 
@@ -114,11 +106,11 @@ def resolve_month_keys_from_conf(conf: dict | None, ds: str) -> list[str]:
     if years:
         matched_months = [
             month_key
-            for month_key in available_month_keys_from_state()
+            for month_key in available_month_keys_from_s3()
             if month_key[:4] in years
         ]
         if not matched_months:
-            logger.warning("No month_keys found in state for years=%s", sorted(years))
+            logger.warning("No month_keys found in S3 for years=%s", sorted(years))
         month_keys.update(matched_months)
 
     if not month_keys:

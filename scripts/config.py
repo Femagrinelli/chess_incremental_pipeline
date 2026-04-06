@@ -3,14 +3,16 @@ from datetime import datetime, timezone
 
 
 RAW_PREFIX = os.environ.get("RAW_PREFIX", "raw")
-BRONZE_PREFIX = os.environ.get("BRONZE_PREFIX", "bronze/chess_com")
-STATE_PREFIX = os.environ.get("STATE_PREFIX", "state/chess_com")
-SILVER_PREFIX = os.environ.get("SILVER_PREFIX", "silver/chess_com")
-GOLD_PREFIX = os.environ.get("GOLD_PREFIX", "gold/chess_com")
+STATE_PREFIX = os.environ.get("STATE_PREFIX", "state")
+WAREHOUSE_PREFIX = os.environ.get("WAREHOUSE_PREFIX", "warehouse")
+BRONZE_PREFIX = f"{WAREHOUSE_PREFIX}/bronze"
+SILVER_PREFIX = f"{WAREHOUSE_PREFIX}/silver"
+GOLD_PREFIX = f"{WAREHOUSE_PREFIX}/gold"
 
 ARCHIVE_REFRESH_DAYS = int(os.environ.get("ARCHIVE_REFRESH_DAYS", "30"))
 ACTIVE_ARCHIVE_REFRESH_HOURS = int(os.environ.get("ACTIVE_ARCHIVE_REFRESH_HOURS", "24"))
 TITLE_TASK_MAX_WORKERS = int(os.environ.get("TITLE_TASK_MAX_WORKERS", "3"))
+STATE_SCAN_MAX_WORKERS = int(os.environ.get("STATE_SCAN_MAX_WORKERS", "32"))
 BACKFILL_PLAYERS_PER_RUN = int(os.environ.get("BACKFILL_PLAYERS_PER_RUN", "10"))
 BACKFILL_MONTHS_PER_PLAYER = int(os.environ.get("BACKFILL_MONTHS_PER_PLAYER", "6"))
 PARQUET_BUCKET_COUNT = int(os.environ.get("PARQUET_BUCKET_COUNT", os.environ.get("SILVER_BUCKET_COUNT", "16")))
@@ -64,7 +66,7 @@ def player_archives_snapshot_key(username: str, snapshot_date: str) -> str:
 
 def player_games_key(username: str, year: str, month: str) -> str:
     month = str(month).zfill(2)
-    return f"{RAW_PREFIX}/player_games/{username}/{year}/{month}.json"
+    return f"{RAW_PREFIX}/player_games/year={year}/month={month}/username={username}.json"
 
 
 def titled_players_prefix(title: str) -> str:
@@ -75,7 +77,14 @@ def player_archives_prefix(username: str) -> str:
     return f"{RAW_PREFIX}/player_archives/{username}/"
 
 
-def player_games_prefix(username: str) -> str:
+def player_games_month_prefix(year: str, month: str) -> str:
+    month = str(month).zfill(2)
+    return f"{RAW_PREFIX}/player_games/year={year}/month={month}/"
+
+
+def legacy_player_games_prefix(username: str) -> str:
+    # Legacy raw layout: raw/player_games/{username}/{year}/{month}.json.
+    # Retained only for one-time bootstrap from pre-migration data.
     return f"{RAW_PREFIX}/player_games/{username}/"
 
 
@@ -99,3 +108,5 @@ def bronze_player_game_facts_prefix(month_key: str) -> str:
 
 def bronze_player_game_facts_key(month_key: str, bucket: str) -> str:
     return f"{bronze_player_game_facts_prefix(month_key)}bucket={bucket}/part-000.parquet"
+
+
